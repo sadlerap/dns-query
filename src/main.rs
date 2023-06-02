@@ -2,7 +2,7 @@ use std::net::UdpSocket;
 
 use clap::{command, Parser};
 use color_eyre::eyre::Context;
-use dns::build_query;
+use dns::{build_query, Response};
 
 mod dns;
 
@@ -14,7 +14,7 @@ struct App {
 
     // query type to perform
     #[arg(value_enum, short, long)]
-    query_type: dns::QueryType
+    query_type: dns::QueryType,
 }
 
 fn main() -> color_eyre::Result<()> {
@@ -25,12 +25,17 @@ fn main() -> color_eyre::Result<()> {
     let query = build_query(&app.domain_name, app.query_type, 1);
     let connection = UdpSocket::bind("0.0.0.0:12345")?;
     let remote_address = ("192.168.2.102", 53);
-    connection.send_to(&query, remote_address)
+    connection
+        .send_to(&query, remote_address)
         .context("Failed to connect to DNS server")?;
     let mut response = [0u8; 1024];
-    let (size, _) =  connection.recv_from(&mut response)
+    let (size, _) = connection
+        .recv_from(&mut response)
         .context("Did not receive a response!")?;
-    println!("{:?}", &response[..size]);
+
+    let buf = &response[..size];
+    let response = Response::parse(buf)?;
+    println!("{:?}", response);
 
     Ok(())
 }
