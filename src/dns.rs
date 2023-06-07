@@ -1,12 +1,17 @@
-use std::io::Write;
+use std::{
+    io::Write,
+    net::{Ipv4Addr, Ipv6Addr},
+};
 
 mod types;
+use color_eyre::eyre::Context;
 pub use types::*;
 use winnow::{
     binary::{be_u16, be_u32, u8},
     combinator::repeat,
     multi::length_data,
-    IResult, Parser, token::take,
+    token::take,
+    IResult, Parser,
 };
 
 pub trait AsBytes {
@@ -109,10 +114,10 @@ where
     } else {
         // sequence of labels
         let (remaining, x) = take(head as usize)
-            .map(|x| String::from_utf8_lossy(x))
+            .map(String::from_utf8_lossy)
             .parse_next(remaining)?;
         let (remaining, other) = decode_dns_name(remaining, full_input)?;
-        if other.len() != 0 {
+        if !other.is_empty() {
             let output = format!("{x}.{other}");
             Ok((remaining, output))
         } else {
@@ -146,7 +151,7 @@ pub fn build_query(domain_name: &str, record_type: QueryType, id: u16) -> Vec<u8
     let mut output = vec![];
     let header = Header {
         id,
-        flags: 0x0100,
+        flags: 0x0000,
         num_questions: 1,
         ..Default::default()
     };
@@ -158,11 +163,11 @@ pub fn build_query(domain_name: &str, record_type: QueryType, id: u16) -> Vec<u8
 
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct Record {
-    name: String,
-    ty: QueryType,
-    class: ClassType,
-    ttl: u32,
-    data: Vec<u8>,
+    pub name: String,
+    pub ty: QueryResponse,
+    pub class: ClassType,
+    pub ttl: u32,
+    pub data: Vec<u8>,
 }
 
 impl Record {
@@ -172,19 +177,66 @@ impl Record {
     {
         (
             |x| -> IResult<&'a [u8], String> { return decode_dns_name(x, full_input) },
-            be_u16.try_map(|x| QueryType::try_from(x)),
-            be_u16.try_map(|x| ClassType::try_from(x)),
+            be_u16.try_map(QueryType::try_from),
+            be_u16.try_map(ClassType::try_from),
             be_u32,
             length_data(be_u16),
         )
-            .map(|x| Self {
-                name: x.0,
-                ty: x.1,
-                class: x.2,
-                ttl: x.3,
-                data: x.4.to_owned(),
+            .try_map(|x| -> color_eyre::Result<Record> {
+                let query_response = match x.1 {
+                    QueryType::A => QueryResponse::A(Ipv4Addr::new(x.4[0], x.4[1], x.4[2], x.4[3])),
+                    QueryType::Ns => {
+                        let name = decode_dns_name(x.4, full_input)
+                            .map(|x| x.1)
+                            .map_err(|e| color_eyre::eyre::eyre!("Got error from winnow: {e}"))
+                            .context("Failed to parse dns name")?;
+                        QueryResponse::Ns(name)
+                    }
+                    QueryType::Md => QueryResponse::Md,
+                    QueryType::Mf => QueryResponse::Mf,
+                    QueryType::Cname => {
+                        let name = decode_dns_name(x.4, full_input)
+                            .map(|x| x.1)
+                            .map_err(|e| color_eyre::eyre::eyre!("Got error from winnow: {e}"))
+                            .context("Failed to parse dns name")?;
+                        QueryResponse::Cname(name)
+                    }
+                    QueryType::Soa => QueryResponse::Soa,
+                    QueryType::Mb => QueryResponse::Mb,
+                    QueryType::Mg => QueryResponse::Mg,
+                    QueryType::Mr => QueryResponse::Mr,
+                    QueryType::Null => QueryResponse::Null,
+                    QueryType::Wks => QueryResponse::Wks,
+                    QueryType::Ptr => QueryResponse::Ptr,
+                    QueryType::Hinfo => QueryResponse::Hinfo,
+                    QueryType::Minfo => QueryResponse::Minfo,
+                    QueryType::Mx => QueryResponse::Mx,
+                    QueryType::Txt => QueryResponse::Txt(String::from_utf8_lossy(x.4).to_string()),
+                    QueryType::Aaaa => {
+                        let array: [u8; 16] = x.4.try_into()?;
+                        QueryResponse::Aaaa(Ipv6Addr::from(array))
+                    }
+                };
+                Ok(Self {
+                    name: x.0,
+                    ty: query_response,
+                    class: x.2,
+                    ttl: x.3,
+                    data: x.4.to_owned(),
+                })
             })
             .parse_next(input)
+    }
+
+    pub fn data(&self) -> String {
+        match self.ty {
+            QueryResponse::A(addr) => addr.to_string(),
+            QueryResponse::Ns(ref nameserver) => nameserver.clone(),
+            QueryResponse::Cname(ref name) => name.to_string(),
+            QueryResponse::Aaaa(addr) => addr.to_string(),
+            QueryResponse::Txt(ref data) => data.clone(),
+            _ => format!("\"{:?}\"", &self.data),
+        }
     }
 }
 
@@ -233,6 +285,18 @@ impl Response {
             additionals,
         })
     }
+
+    pub fn answers(&self) -> impl Iterator<Item = &Record> {
+        self.answers.iter()
+    }
+
+    pub fn authorities(&self) -> impl Iterator<Item = &Record> {
+        self.authorities.iter()
+    }
+
+    pub fn additionals(&self) -> impl Iterator<Item = &Record> {
+        self.additionals.iter()
+    }
 }
 
 #[cfg(test)]
@@ -273,14 +337,14 @@ mod test {
     fn test_build_query() {
         let query = build_query("google.com", QueryType::A, 1);
 
-        assert_eq!(query, b"\x00\x01\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x06google\x03com\x00\x00\x01\x00\x01")
+        assert_eq!(query, b"\x00\x01\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x06google\x03com\x00\x00\x01\x00\x01")
     }
 
     #[test]
     fn test_parse_header() {
         let header = Header {
             id: 0xa,
-            flags: 0xb,
+            flags: 0x9,
             num_questions: 0xc,
             num_additionals: 0xd,
             num_authorities: 0xe,
@@ -338,7 +402,7 @@ mod test {
             response.answers,
             [Record {
                 name: "pi.hole".into(),
-                ty: QueryType::A,
+                ty: QueryResponse::A(Ipv4Addr::new(192, 168, 2, 102)),
                 class: ClassType::IN,
                 ttl: 0,
                 data: vec![192, 168, 2, 102]

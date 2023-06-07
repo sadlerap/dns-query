@@ -1,3 +1,5 @@
+use std::net::{Ipv4Addr, Ipv6Addr};
+
 use clap::ValueEnum;
 use thiserror::Error;
 
@@ -55,6 +57,33 @@ pub enum QueryType {
 
     /// text strings
     Txt = 16,
+
+    /// IPv6 address
+    Aaaa = 28,
+}
+
+impl From<&QueryResponse> for QueryType {
+    fn from(value: &QueryResponse) -> Self {
+        match value {
+            QueryResponse::A(_) => Self::A,
+            QueryResponse::Ns(_) => Self::Ns,
+            QueryResponse::Md => Self::Md,
+            QueryResponse::Mf => Self::Mf,
+            QueryResponse::Cname(_) => Self::Cname,
+            QueryResponse::Soa => Self::Soa,
+            QueryResponse::Mb => Self::Mb,
+            QueryResponse::Mg => Self::Mg,
+            QueryResponse::Mr => Self::Mr,
+            QueryResponse::Null => Self::Null,
+            QueryResponse::Wks => Self::Wks,
+            QueryResponse::Ptr => Self::Ptr,
+            QueryResponse::Hinfo => Self::Hinfo,
+            QueryResponse::Minfo => Self::Minfo,
+            QueryResponse::Mx => Self::Mx,
+            QueryResponse::Txt(_) => Self::Txt,
+            QueryResponse::Aaaa(_) => Self::Aaaa,
+        }
+    }
 }
 
 #[derive(Error, Debug)]
@@ -84,9 +113,94 @@ impl TryFrom<u16> for QueryType {
             14 => Self::Minfo,
             15 => Self::Mx,
             16 => Self::Txt,
+            28 => Self::Aaaa,
             _ => return Err(TryFromQueryTypeError::Unknown(value)),
         };
         Ok(x)
+    }
+}
+
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub enum QueryResponse {
+    /// host address record
+    A(std::net::Ipv4Addr),
+
+    /// authoratative name server record
+    Ns(String),
+
+    /// mail destination record (obsolete, use MX)
+    Md,
+
+    /// mail forwarder record (obsolete, use MX)
+    Mf,
+
+    /// canonical name for an alias
+    Cname(String),
+
+    /// start of a zone of authority
+    Soa,
+
+    /// mailbox domain name (EXPERIMENTAL)
+    Mb,
+
+    /// mail group member (EXPERIMENTAL)
+    Mg,
+
+    /// mail rename domain name (EXPERIMENTAL)
+    Mr,
+
+    /// null RR (EXPERIMENTAL)
+    Null,
+
+    /// well-known service description
+    Wks,
+
+    /// domain name pointer
+    Ptr,
+
+    /// host information
+    Hinfo,
+
+    /// mailbox or mail list information
+    Minfo,
+
+    /// mail exchange
+    Mx,
+
+    /// text strings
+    Txt(String),
+
+    /// IPv6 Address
+    Aaaa(Ipv6Addr),
+}
+
+impl QueryResponse {
+    pub fn name(&self) -> &'static str {
+        match self {
+            QueryResponse::A(_) => "A",
+            QueryResponse::Ns(_) => "NS",
+            QueryResponse::Md => "MD",
+            QueryResponse::Mf => "MF",
+            QueryResponse::Cname(_) => "CNAME",
+            QueryResponse::Soa => "SOA",
+            QueryResponse::Mb => "MB",
+            QueryResponse::Mg => "MG",
+            QueryResponse::Mr => "MR",
+            QueryResponse::Null => "NULL",
+            QueryResponse::Wks => "WKS",
+            QueryResponse::Ptr => "PTR",
+            QueryResponse::Hinfo => "HINFO",
+            QueryResponse::Minfo => "MINFO",
+            QueryResponse::Mx => "MX",
+            QueryResponse::Txt(_) => "TXT",
+            QueryResponse::Aaaa(_) => "AAAA",
+        }
+    }
+}
+
+impl Default for QueryResponse {
+    fn default() -> Self {
+        Self::A(Ipv4Addr::new(0, 0, 0, 0))
     }
 }
 
