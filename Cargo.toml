@@ -1,5 +1,5 @@
 [package]
-name = "dns-query"
+name = "dns_query"
 version = "0.1.0"
 edition = "2021"
 
@@ -9,3 +9,12 @@ color-eyre = "0.6.2"
 rand = "0.8.5"
 thiserror = "1.0.40"
 winnow = "0.4.6"
+
+[lib]
+crate-type = ["lib"]
+path = "src/lib.rs"
+
+
+[[bin]]
+path = "src/main.rs"
+name = "dns-query"

@@ -9,6 +9,7 @@ pub use types::*;
 use winnow::{
     binary::{be_u16, be_u32, u8},
     combinator::repeat,
+    error::{ErrMode, Error, ErrorKind},
     multi::length_data,
     token::take,
     IResult, Parser,
@@ -96,17 +97,28 @@ impl Question {
     }
 }
 
-#[allow(clippy::let_and_return)]
-fn decode_dns_name<'a, 'b>(bytes: &'a [u8], full_input: &'b [u8]) -> IResult<&'a [u8], String>
+const MAX_PTR_TRAVERSALS: u8 = 126;
+
+fn decode_helper<'a, 'b>(
+    bytes: &'a [u8],
+    full_input: &'b [u8],
+    depth: u8,
+) -> IResult<&'a [u8], String>
 where
     'b: 'a,
 {
+    if depth > MAX_PTR_TRAVERSALS {
+        return Err(ErrMode::Cut(Error::new(bytes, ErrorKind::Verify)))
+    }
     let (remaining, head) = u8.parse_next(bytes)?;
     if head & 0b1100_0000 == 0b11000000 {
         // pointer
         let (remaining, next) = u8.parse_next(remaining)?;
         let index = ((((head & 0b0011_1111) as u16) << 8) | (next as u16)) as usize;
-        let (_, output) = decode_dns_name(&full_input[index..], full_input)?;
+        if index > full_input.len() {
+            return Err(ErrMode::Cut(Error::new(full_input, ErrorKind::Fail)));
+        }
+        let (_, output) = decode_helper(&full_input[index..], full_input, depth + 1)?;
         Ok((remaining, output))
     } else if head == 0 {
         // end of input
@@ -116,7 +128,7 @@ where
         let (remaining, x) = take(head as usize)
             .map(String::from_utf8_lossy)
             .parse_next(remaining)?;
-        let (remaining, other) = decode_dns_name(remaining, full_input)?;
+        let (remaining, other) = decode_helper(remaining, full_input, depth + 1)?;
         if !other.is_empty() {
             let output = format!("{x}.{other}");
             Ok((remaining, output))
@@ -126,7 +138,14 @@ where
     }
 }
 
-fn encode_dns_name(name: &str) -> Vec<u8> {
+pub fn decode_dns_name<'a, 'b>(bytes: &'a [u8], full_input: &'b [u8]) -> IResult<&'a [u8], String>
+where
+    'b: 'a,
+{
+    decode_helper(bytes, full_input, 0)
+}
+
+pub fn encode_dns_name(name: &str) -> Vec<u8> {
     let mut output = vec![];
     for substr in name.split('.') {
         output.push(substr.len() as u8);
